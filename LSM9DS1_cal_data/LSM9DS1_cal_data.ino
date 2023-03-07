@@ -55,6 +55,7 @@ static unsigned long lastPrint = 0; // Keep track of print time
 
 void setup()
 {
+  delay(1000);
   Serial.begin(9600);
   while (!Serial); //wait for connection
 
@@ -79,6 +80,7 @@ void setup()
     }
   }
   Serial.println(F("gyro offsets"));
+  Serial.print("~g");
   Serial.print(gxa / 300);
   Serial.print(", ");
   Serial.print(gya / 300);
@@ -110,6 +112,7 @@ void loop()
 
   if (millis() - lastPrint > PRINT_SPEED)
   {
+    Serial.print("~m");
     Serial.print(imu.ax);
     Serial.print(", ");
     Serial.print(imu.ay);

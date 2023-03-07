@@ -1,10 +1,9 @@
-// New UW Mahony AHRS for the LSM9DS1  S.J. Remington 3/2021
+// Mahony AHRS for the LSM9DS1  S.J. Remington 2/2021
 // Requires the Sparkfun LSM9DS1 library
 // Standard sensor orientation X North (yaw=0), Y West, Z up
+// See: http://www.x-io.co.uk/open-source-imu-and-ahrs-algorithms/
 // NOTE: Sensor X axis is remapped to the opposite direction of the "X arrow" on the Adafruit sensor breakout!
 
-// New Mahony filter error scheme uses Up (accel Z axis) and West (= Acc X Mag) as the orientation reference vectors
-// heavily modified from http://www.x-io.co.uk/open-source-imu-and-ahrs-algorithms/
 // Both the accelerometer and magnetometer MUST be properly calibrated for this program to work.
 // Follow the procedure described in http://sailboatinstruments.blogspot.com/2011/08/improved-magnetometer-calibration.html
 // or in more detail, the tutorial https://thecavepearlproject.org/2015/05/22/calibrating-any-compass-or-accelerometer-for-arduino/
@@ -39,34 +38,34 @@ LSM9DS1 imu;
 
 // VERY IMPORTANT!
 //These are the previously determined offsets and scale factors for accelerometer and magnetometer, using MPU9250_cal and Magneto
-//The filter will produce meaningless results if these data are not correct
+//The filter will not produce sensible results if these are not correct
 
 //Gyro scale 245 dps convert to radians/sec and offsets
 float Gscale = (M_PI / 180.0) * 0.00875; //245 dps scale sensitivity = 8.75 mdps/LSB
-int G_offset[3] = {75, 31, 142};
+int G_offset[3] = {27, 0, 131};
 
 //Accel scale 16457.0 to normalize
 float A_B[3]
-{ -133.33,   72.29, -291.92};
+{ -281.62,  256.06, -200.83};
 
 float A_Ainv[3][3]
-{ {  1.00260,  0.00404,  0.00023},
-  {  0.00404,  1.00708,  0.00263},
-  {  0.00023,  0.00263,  0.99905}
+{ {  1.01515,  0.01269, -0.00609},
+  {  0.01269,  1.00672, -0.00984},
+  { -0.00609, -0.00984,  0.99704}
 };
 
 //Mag scale 3746.0 to normalize
 float M_B[3]
-{ -922.31, 2199.41,  373.17};
+{ 2996.34,-3480.63,-1370.53};
 
 float M_Ainv[3][3]
-{ {  1.04492,  0.03452, -0.01714},
-  {  0.03452,  1.05168,  0.00644},
-  { -0.01714,  0.00644,  1.07005}
+{ {  2.29807,  0.08914, -0.12923},
+  {  0.08914,  2.30374, -0.15326},
+  { -0.12923, -0.15326,  2.37179}
 };
 
 // local magnetic declination in degrees
-float declination = -14.84;
+float declination = 5;
 
 // These are the free parameters in the Mahony filter and fusion scheme,
 // Kp for proportional feedback, Ki for integral
@@ -87,9 +86,8 @@ static float yaw, pitch, roll; //Euler angle output
 
 void setup()
 {
-  Serial.begin(115200);
+  Serial.begin(9600);
   while (!Serial); //wait for connection
-  Serial.println();
   Serial.println("LSM9DS1 AHRS starting");
 
   Wire.begin();
@@ -104,7 +102,6 @@ void setup()
 void loop()
 {
   static char updated = 0; //flags for sensor updates
-  static int loop_counter=0; //sample & update loop counter
   static float Gxyz[3], Axyz[3], Mxyz[3]; //centered and scaled gyro/accel/mag data
 
   // Update the sensor values whenever new data is available
@@ -123,7 +120,6 @@ void loop()
   if (updated == 7) //all sensors updated?
   {
     updated = 0; //reset update flags
-    loop_counter++;
     get_scaled_IMU(Gxyz, Axyz, Mxyz);
 
     // correct accel/gyro handedness
@@ -132,55 +128,55 @@ void loop()
 
     Axyz[0] = -Axyz[0]; //fix accel/gyro handedness
     Gxyz[0] = -Gxyz[0]; //must be done after offsets & scales applied to raw data
-   
+
     now = micros();
     deltat = (now - last) * 1.0e-6; //seconds since last update
     last = now;
 
     MahonyQuaternionUpdate(Axyz[0], Axyz[1], Axyz[2], Gxyz[0], Gxyz[1], Gxyz[2],
                            Mxyz[0], Mxyz[1], Mxyz[2], deltat);
+    
+// skip ypr calc for speed? (see below)
+//     if (millis() - lastPrint > PRINT_SPEED) {
 
+    // Define Tait-Bryan angles. Strictly valid only for approximately level movement
+    
+    // Standard sensor orientation : X magnetic North, Y West, Z Up (NWU)
+    // this code corrects for magnetic declination.
+    // Pitch is angle between sensor x-axis and Earth ground plane, toward the
+    // Earth is positive, up toward the sky is negative. Roll is angle between
+    // sensor y-axis and Earth ground plane, y-axis up is positive roll. 
+    // Tait-Bryan angles as well as Euler angles are
+    // non-commutative; that is, the get the correct orientation the rotations
+    // must be applied in the correct order.
+    //
+    // http://en.wikipedia.org/wiki/Conversion_between_quaternions_and_Euler_angles
+    // which has additional links.
+    
+    // WARNING: This angular conversion is for DEMONSTRATION PURPOSES ONLY. It WILL
+    // MALFUNCTION for certain combinations of angles! See https://en.wikipedia.org/wiki/Gimbal_lock
+    
+    roll  = atan2((q[0] * q[1] + q[2] * q[3]), 0.5 - (q[1] * q[1] + q[2] * q[2]));
+    pitch = asin(2.0 * (q[0] * q[2] - q[1] * q[3]));
+    yaw   = atan2((q[1] * q[2] + q[0] * q[3]), 0.5 - ( q[2] * q[2] + q[3] * q[3]));
+    // to degrees
+    yaw   *= 180.0 / PI;
+    pitch *= 180.0 / PI;
+    roll *= 180.0 / PI;
+
+    // http://www.ngdc.noaa.gov/geomag-web/#declination
+    //conventional nav, yaw increases CW from North, corrected for local magnetic declination
+
+    yaw = -(yaw + declination);
+    if (yaw < 0) yaw += 360.0;
+    if (yaw >= 360.0) yaw -= 360.0;
+// skip ypr printing    
     if (millis() - lastPrint > PRINT_SPEED) {
-
-      // Define Tait-Bryan angles, strictly valid only for approximately level movement
-      // Standard sensor orientation : X magnetic North, Y West, Z Up (NWU)
-      // this code corrects for magnetic declination.
-      // Pitch is angle between sensor x-axis and Earth ground plane, toward the
-      // Earth is positive, up toward the sky is negative. Roll is angle between
-      // sensor y-axis and Earth ground plane, y-axis up is positive roll.
-      // Tait-Bryan angles as well as Euler angles are
-      // non-commutative; that is, the get the correct orientation the rotations
-      // must be applied in the correct order.
-      //
-      // http://en.wikipedia.org/wiki/Conversion_between_quaternions_and_Euler_angles
-      // which has additional links.
-      
-      // WARNING: This angular conversion is for DEMONSTRATION PURPOSES ONLY. It WILL
-      // MALFUNCTION for certain combinations of angles! See https://en.wikipedia.org/wiki/Gimbal_lock
-      roll  = atan2((q[0] * q[1] + q[2] * q[3]), 0.5 - (q[1] * q[1] + q[2] * q[2]));
-      pitch = asin(2.0 * (q[0] * q[2] - q[1] * q[3]));
-      yaw   = atan2((q[1] * q[2] + q[0] * q[3]), 0.5 - ( q[2] * q[2] + q[3] * q[3]));
-      // to degrees
-      yaw   *= 180.0 / PI;
-      pitch *= 180.0 / PI;
-      roll *= 180.0 / PI;
-
-      // http://www.ngdc.noaa.gov/geomag-web/#declination
-      //conventional nav, yaw increases CW from North, corrected for local magnetic declination
-
-      yaw = -(yaw + declination);
-      if (yaw < 0) yaw += 360.0;
-      if (yaw >= 360.0) yaw -= 360.0;
-
-      Serial.print("ypr ");
       Serial.print(yaw, 0);
-      Serial.print(", ");
+      Serial.print("~");
       Serial.print(pitch, 0);
-      Serial.print(", ");
+      Serial.print("~");
       Serial.print(roll, 0);
-//      Serial.print(", ");  //prints 24 in 300 ms (80 Hz) with 16 MHz ATmega328
-//      Serial.print(loop_counter);  //sample & update loops per print interval
-      loop_counter = 0;
       Serial.println();
       lastPrint = millis(); // Update lastPrint time
     }
@@ -235,22 +231,20 @@ void get_scaled_IMU(float Gxyz[3], float Axyz[3], float Mxyz[3]) {
   vector_normalize(Mxyz);
 }
 
-// Mahony orientation filter, assumed World Frame NWU (xNorth, yWest, zUp)
-// Modified from Madgwick version to remove Z component of magnetometer:
-// The two reference vectors are now Up (Z, Acc) and West (Acc cross Mag)
-// sjr 3/2021
-// input vectors ax, ay, az and mx, my, mz MUST be normalized!
-// gx, gy, gz must be in units of radians/second
-//
+// Mahony fusion scheme uses proportional and integral filtering on
+// the error between estimated reference vectors and measured ones.
+// [ax,ay,az] and [mx,my,mz] MUST be normalized (unit vectors)
+// [gx,gy,gz] MUST be in radians/sec
+
 void MahonyQuaternionUpdate(float ax, float ay, float az, float gx, float gy, float gz, float mx, float my, float mz, float deltat)
 {
   // Vector to hold integral error for Mahony method
   static float eInt[3] = {0.0, 0.0, 0.0};
-    // short name local variable for readability
+  // short name local variable for readability
   float q1 = q[0], q2 = q[1], q3 = q[2], q4 = q[3];
   float norm;
-  float hx, hy, hz;  //observed West horizon vector W = AxM
-  float ux, uy, uz, wx, wy, wz; //calculated A (Up) and W in body frame
+  float hx, hy, bx, bz;
+  float vx, vy, vz, wx, wy, wz;
   float ex, ey, ez;
   float pa, pb, pc;
 
@@ -265,37 +259,24 @@ void MahonyQuaternionUpdate(float ax, float ay, float az, float gx, float gy, fl
   float q3q3 = q3 * q3;
   float q3q4 = q3 * q4;
   float q4q4 = q4 * q4;
+  // Reference direction of Earth's magnetic field
+  hx = 2.0f * mx * (0.5f - q3q3 - q4q4) + 2.0f * my * (q2q3 - q1q4) + 2.0f * mz * (q2q4 + q1q3);
+  hy = 2.0f * mx * (q2q3 + q1q4) + 2.0f * my * (0.5f - q2q2 - q4q4) + 2.0f * mz * (q3q4 - q1q2);
+  bx = sqrt((hx * hx) + (hy * hy));
+  bz = 2.0f * mx * (q2q4 - q1q3) + 2.0f * my * (q3q4 + q1q2) + 2.0f * mz * (0.5f - q2q2 - q3q3);
 
-  // Measured horizon vector = a x m (in body frame)
-  hx = ay * mz - az * my;
-  hy = az * mx - ax * mz;
-  hz = ax * my - ay * mx;
-  // Normalise horizon vector
-  norm = sqrt(hx * hx + hy * hy + hz * hz);
-  if (norm == 0.0f) return; // Handle div by zero
+  // Estimated direction of gravity and magnetic field
+  vx = 2.0f * (q2q4 - q1q3);
+  vy = 2.0f * (q1q2 + q3q4);
+  vz = q1q1 - q2q2 - q3q3 + q4q4;
+  wx = 2.0f * bx * (0.5f - q3q3 - q4q4) + 2.0f * bz * (q2q4 - q1q3);
+  wy = 2.0f * bx * (q2q3 - q1q4) + 2.0f * bz * (q1q2 + q3q4);
+  wz = 2.0f * bx * (q1q3 + q2q4) + 2.0f * bz * (0.5f - q2q2 - q3q3);
 
-  norm = 1.0f / norm;
-  hx *= norm;
-  hy *= norm;
-  hz *= norm;
-
-  // Estimated direction of Up reference vector
-  ux = 2.0f * (q2q4 - q1q3);
-  uy = 2.0f * (q1q2 + q3q4);
-  uz = q1q1 - q2q2 - q3q3 + q4q4;
-
-  // estimated direction of horizon (West) reference vector
-  wx = 2.0f * (q2q3 + q1q4);
-  wy = q1q1 - q2q2 + q3q3 - q4q4;
-  wz = 2.0f * (q3q4 - q1q2);
-
-  // Error is the summed cross products of estimated and measured directions of the reference vectors
-  // It is assumed small, so sin(theta) ~ theta IS the angle required to correct the orientation error.
-
-  ex = (ay * uz - az * uy) + (hy * wz - hz * wy);
-  ey = (az * ux - ax * uz) + (hz * wx - hx * wz);
-  ez = (ax * uy - ay * ux) + (hx * wy - hy * wx);
- 
+  // Error is cross product between estimated direction and measured direction of the reference vectors
+  ex = (ay * vz - az * vy) + (my * wz - mz * wy);
+  ey = (az * vx - ax * vz) + (mz * wx - mx * wz);
+  ez = (ax * vy - ay * vx) + (mx * wy - my * wx);
   if (Ki > 0.0f)
   {
     eInt[0] += ex;      // accumulate integral error
@@ -313,6 +294,7 @@ void MahonyQuaternionUpdate(float ax, float ay, float az, float gx, float gy, fl
   gy = gy + Kp * ey;
   gz = gz + Kp * ez;
 
+
  //update quaternion with integrated contribution
  // small correction 1/11/2022, see https://github.com/kriswiner/MPU9250/issues/447
 gx = gx * (0.5*deltat); // pre-multiply common factors
@@ -325,7 +307,6 @@ q1 += (-qb * gx - qc * gy - q4 * gz);
 q2 += (qa * gx + qc * gz - q4 * gy);
 q3 += (qa * gy - qb * gz + q4 * gx);
 q4 += (qa * gz + qb * gy - qc * gx);
-
   // Normalise quaternion
   norm = sqrt(q1 * q1 + q2 * q2 + q3 * q3 + q4 * q4);
   norm = 1.0f / norm;
